@@ -19,7 +19,7 @@ It also allows viewing existing ICO files.
 
 1. Clone the repository:
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/slipperyduckza/RUSTY_SVG2ICO
    cd WIN_SVG2ICO
    ```
 
