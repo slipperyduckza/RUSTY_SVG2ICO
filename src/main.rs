@@ -1,179 +1,256 @@
-use eframe::egui;
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use iced::widget::{button, column, container, image, row, scrollable, text, vertical_space};
+use iced::{Alignment, Application, Color, Command, Element, Length, Settings, Size, Theme, alignment, window};
+
+struct MyContainerStyle(Color);
+
+impl container::StyleSheet for MyContainerStyle {
+    type Style = Theme;
+
+    fn appearance(&self, _style: &Self::Style) -> container::Appearance {
+        container::Appearance {
+            background: Some(iced::Background::Color(self.0)),
+            border: iced::Border {
+                color: Color::BLACK,
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            ..Default::default()
+        }
+    }
+}
+
+struct MainBgStyle(Color);
+
+impl container::StyleSheet for MainBgStyle {
+    type Style = Theme;
+
+    fn appearance(&self, _style: &Self::Style) -> container::Appearance {
+        container::Appearance {
+            background: Some(iced::Background::Color(self.0)),
+            ..Default::default()
+        }
+    }
+}
+
+struct LogoStyle;
+
+impl container::StyleSheet for LogoStyle {
+    type Style = Theme;
+
+    fn appearance(&self, _style: &Self::Style) -> container::Appearance {
+        container::Appearance {
+            background: Some(iced::Background::Color(Color::from_rgb(144.0 / 255.0, 144.0 / 255.0, 144.0 / 255.0))), // #909090
+            border: iced::Border {
+                radius: 10.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+}
 use std::io;
 
 // Embed the logo image data at compile time so it's included in the executable
-static LOGO_DATA: &[u8] = include_bytes!("../RUSTYSVG2ICO420.png");
+static LOGO_DATA: &[u8] = include_bytes!("../assets/RUSTYSVG2ICO420.png");
 
-// Main application struct that holds the state of our SVG to ICO converter app
 struct SvgToIcoApp {
-    // Raw ICO file data in memory
     ico_data: Option<Vec<u8>>,
-    // List of textures for each icon size, with their resolution strings
-    textures: Vec<(egui::TextureHandle, String)>,
-    // True if the ICO was generated from SVG, false if loaded from file
+    images: Vec<(iced::widget::image::Handle, String)>,
     is_generated: bool,
-    // Texture for the app logo
-    logo_texture: Option<egui::TextureHandle>,
+    logo: Option<iced::widget::image::Handle>,
+    is_dark: bool,
 }
 
-// Implement Default trait to create a new app instance with initial state
-impl Default for SvgToIcoApp {
-    fn default() -> Self {
-        Self {
-            ico_data: None,
-            textures: vec![],
-            is_generated: false,
-            logo_texture: None,
-        }
-    }
+#[derive(Debug, Clone)]
+enum Message {
+    SelectSvg,
+    OpenIco,
+    SaveIcon,
+    IcoLoaded(Vec<u8>, bool),
 }
 
 impl SvgToIcoApp {
-    // Load ICO data and create textures for each icon size for display
-    fn load_textures(&mut self, ctx: &egui::Context, ico_data: &[u8]) {
-        let icon_dir = ico::IconDir::read(io::Cursor::new(ico_data)).unwrap();
-        self.textures.clear();
+    fn load_images(&mut self, data: &[u8]) {
+        let icon_dir = ico::IconDir::read(io::Cursor::new(data)).unwrap();
+        self.images.clear();
         for entry in icon_dir.entries() {
-            let img = if entry.is_png() {
-                image::load_from_memory_with_format(&entry.data(), image::ImageFormat::Png).unwrap()
-            } else {
-                image::load_from_memory_with_format(&entry.data(), image::ImageFormat::Bmp).unwrap()
-            };
-            let rgba = img.to_rgba8();
-            let size = [entry.width() as usize, entry.height() as usize];
-            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
-            let texture = ctx.load_texture(
-                format!("ico_{}x{}", entry.width(), entry.height()),
-                color_image,
-                egui::TextureOptions::default(),
-            );
-            self.textures.push((texture, format!("{} x {}", entry.width(), entry.height())));
+            let handle = iced::widget::image::Handle::from_memory(entry.data().to_vec());
+            self.images.push((handle, format!("{} x {}", entry.width(), entry.height())));
         }
     }
 }
 
-// Implement the App trait for eframe to define our UI and logic
-impl eframe::App for SvgToIcoApp {
-    // This function is called every frame to update the UI
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Define the stroke color for buttons
-        let dark_slate_grey = egui::Color32::from_rgb(47, 79, 79);
-        // Load the logo texture if not already loaded
-        if self.logo_texture.is_none() {
-            let img = image::load_from_memory(LOGO_DATA).unwrap();
-            let rgba = img.to_rgba8();
-            let size = [img.width() as usize, img.height() as usize];
-            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
-            self.logo_texture = Some(ctx.load_texture("logo", color_image, egui::TextureOptions::default()));
-        }
-        // Create the main UI panel
-        egui::CentralPanel::default().show(ctx, |ui| {
-            // Display the logo centered at the top
-            ui.vertical_centered(|ui| {
-                ui.image((self.logo_texture.as_ref().unwrap().id(), self.logo_texture.as_ref().unwrap().size_vec2() * 0.5));
-            });
+impl Application for SvgToIcoApp {
+    type Message = Message;
+    type Theme = Theme;
+    type Executor = iced::executor::Default;
+    type Flags = bool;
 
-            // Horizontal layout for the main action buttons
-            ui.horizontal(|ui| {
-                // Button to select an SVG file and convert it to ICO
-                if ui.add_sized([140.0, 35.0], egui::Button::new("Select SVG File").stroke(egui::Stroke::new(3.0, dark_slate_grey))).clicked() {
-                    if let Some(path) = rfd::FileDialog::new().add_filter("SVG", &["svg"]).pick_file() {
-                        // Create a temporary directory and file for the conversion
-                        let temp_dir = tempfile::TempDir::new().unwrap();
-                        let temp_path = temp_dir.path().join("temp.ico");
-                        // Convert SVG to ICO with multiple sizes
-                        svg_to_ico::svg_to_ico(&path, 256.0, &temp_path, &[256u16, 128, 64, 48, 32, 24, 16]).unwrap();
-                        // Read the generated ICO data
-                        let ico_data = std::fs::read(&temp_path).unwrap();
-                        self.ico_data = Some(ico_data.clone());
-                        self.is_generated = true;
-                        // Load textures for display
-                        self.load_textures(ctx, &ico_data);
-                    }
-                }
+    fn new(flags: bool) -> (Self, Command<Message>) {
+        let mut app = SvgToIcoApp {
+            ico_data: None,
+            images: vec![],
+            is_generated: false,
+            logo: None,
+            is_dark: flags,
+        };
+        app.logo = Some(iced::widget::image::Handle::from_memory(LOGO_DATA.to_vec()));
+        (app, Command::none())
+    }
 
-                // Right-align the "Open ICO File" button
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Button to load an existing ICO file for viewing
-                    if ui.add_sized([140.0, 35.0], egui::Button::new("Open ICO File").stroke(egui::Stroke::new(3.0, dark_slate_grey))).clicked() {
-                        if let Some(path) = rfd::FileDialog::new().add_filter("ICO", &["ico"]).pick_file() {
-                            // Read the ICO file data
-                            let ico_data = std::fs::read(&path).unwrap();
-                            self.ico_data = Some(ico_data.clone());
-                            self.is_generated = false;
-                            // Load textures for display
-                            self.load_textures(ctx, &ico_data);
+    fn title(&self) -> String {
+        "Rusty SVG2ICO".to_string()
+    }
+
+    fn update(&mut self, message: Message) -> Command<Message> {
+        match message {
+            Message::SelectSvg => {
+                Command::perform(
+                    async {
+                        tokio::task::spawn_blocking(|| {
+                            rfd::FileDialog::new().add_filter("SVG", &["svg"]).pick_file()
+                        }).await.unwrap()
+                    },
+                    |path_opt| {
+                        if let Some(path) = path_opt {
+                            let temp_dir = tempfile::TempDir::new().unwrap();
+                            let temp_path = temp_dir.path().join("temp.ico");
+                            svg_to_ico::svg_to_ico(&path, 256.0, &temp_path, &[256u16, 128, 64, 48, 32, 24, 16]).unwrap();
+                            let ico_data = std::fs::read(&temp_path).unwrap();
+                            Message::IcoLoaded(ico_data, true)
+                        } else {
+                            Message::IcoLoaded(vec![], false)
                         }
                     }
-                });
-            });
-
-            // Add some space above the save button
-            ui.add_space(4.0);
-
-            // Show save button only if we have generated ICO data
-            if self.ico_data.is_some() && self.is_generated {
-                // Button to save the generated ICO to a file
-                if ui.add_sized([140.0, 35.0], egui::Button::new("Save Icon").stroke(egui::Stroke::new(3.0, dark_slate_grey))).clicked() {
-                    if let Some(path) = rfd::FileDialog::new().add_filter("ICO", &["ico"]).save_file() {
-                        // Write the ICO data to the chosen file
-                        std::fs::write(path, self.ico_data.as_ref().unwrap()).unwrap();
+                )
+            }
+            Message::OpenIco => {
+                Command::perform(
+                    async {
+                        tokio::task::spawn_blocking(|| {
+                            rfd::FileDialog::new().add_filter("ICO", &["ico"]).pick_file()
+                        }).await.unwrap()
+                    },
+                    |path_opt| {
+                        if let Some(path) = path_opt {
+                            let ico_data = std::fs::read(path).unwrap();
+                            Message::IcoLoaded(ico_data, false)
+                        } else {
+                            Message::IcoLoaded(vec![], false)
+                        }
                     }
+                )
+            }
+            Message::SaveIcon => {
+                if let Some(data) = &self.ico_data {
+                    let data = data.clone();
+                    Command::perform(
+                        async {
+                            tokio::task::spawn_blocking(|| {
+                                rfd::FileDialog::new().add_filter("ICO", &["ico"]).save_file()
+                            }).await.unwrap()
+                        },
+                        move |path_opt| {
+                            if let Some(path) = path_opt {
+                                std::fs::write(path, &data).unwrap();
+                            }
+                            Message::IcoLoaded(vec![], false) // dummy
+                        }
+                    )
+                } else {
+                    Command::none()
                 }
             }
+            Message::IcoLoaded(data, generated) => {
+                if !data.is_empty() {
+                    self.ico_data = Some(data.clone());
+                    self.is_generated = generated;
+                    self.load_images(&data);
+                }
+                Command::none()
+            }
+        }
+    }
 
-            // Add space before the display box
-            ui.add_space(6.0);
+    fn view(&self) -> Element<'_, Message> {
+        let logo = container(image(self.logo.as_ref().unwrap().clone()).width(Length::Fixed(200.0)))
+            .width(Length::Fill)
+            .center_x()
+            .center_y()
+            .style(iced::theme::Container::Custom(Box::new(LogoStyle)))
+            .padding([0, 20, 10, 20]); // top 0, right 20, bottom 10, left 20
 
-            // Center the display box vertically
-            ui.vertical_centered(|ui| {
-                // Create a framed group for the icon display area
-                egui::Frame::group(&ui.style()).fill(egui::Color32::DARK_GRAY).rounding(10.0).inner_margin(6.0).show(ui, |ui| {
-                    // Allocate space for the scrollable area
-                    ui.allocate_ui(egui::vec2(380.0, 596.0), |ui| {
-                        // Make it scrollable vertically
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            // If no textures, show empty space
-                            if self.textures.is_empty() {
-                                ui.allocate_space(egui::vec2(368.0, 400.0));
-                            } else {
-                                // Display each icon size with its resolution
-                                for (texture, res) in &self.textures {
-                                let image_size = texture.size_vec2();
-                                let row_height = image_size.y;
-                                ui.horizontal(|ui| {
-                                    ui.allocate_ui(egui::vec2(262.0, row_height), |ui| {
-                                        ui.vertical_centered(|ui| {
-                                            ui.image((texture.id(), image_size));
-                                        });
-                                    });
-                                    ui.allocate_ui(egui::vec2(368.0 - 262.0, row_height), |ui| {
-                                    ui.vertical_centered(|ui| {
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.colored_label(egui::Color32::WHITE, res));
-                                    });
-                                    });
-                                });
-                            }
-                        }
-                    });
-                });
-            });
-            });
-        });
+        let select_button = button("Select SVG File").on_press(Message::SelectSvg);
+        let open_button = button("Open ICO File").on_press(Message::OpenIco);
+
+        let buttons_row = row![select_button, open_button].spacing(10);
+
+        let save_button = if self.ico_data.is_some() && self.is_generated {
+            Some(button("Save Icon").on_press(Message::SaveIcon))
+        } else {
+            None
+        };
+
+        let images_column = if self.images.is_empty() {
+            column![].height(Length::Fixed(400.0))
+        } else {
+            let mut col = column![].spacing(10);
+            for (handle, res) in &self.images {
+                let img = image(handle.clone());
+                let txt = text(res).style(iced::theme::Text::Color(Color::WHITE));
+                let txt_container = container(txt).width(Length::Fill).align_x(alignment::Horizontal::Right);
+                col = col.push(row![img, txt_container].spacing(10).align_items(Alignment::Center));
+            }
+            col
+        };
+
+        let scrollable_images = scrollable(images_column).height(Length::Fixed(646.0)).width(Length::Fixed(380.0));
+
+        let container_bg_color = if self.is_dark {
+            Color::from_rgb(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0) // grey
+        } else {
+            Color::from_rgb(1.0, 1.0, 240.0 / 255.0) // ivory
+        };
+        let framed_images = container(scrollable_images)
+            .height(Length::Fixed(646.0))
+            .style(iced::theme::Container::Custom(Box::new(MyContainerStyle(container_bg_color))))
+            .padding(6);
+
+        let mut content = column![logo, buttons_row]
+            .spacing(10)
+            .align_items(Alignment::Center);
+
+        if let Some(save) = save_button {
+            content = content.push(save);
+        }
+
+        content = content.push(vertical_space().height(6));
+        content = content.push(framed_images);
+
+        let main_bg_color = Color::from_rgb(48.0 / 255.0, 48.0 / 255.0, 48.0 / 255.0); // #303030
+
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x()
+            .center_y()
+            .style(iced::theme::Container::Custom(Box::new(MainBgStyle(main_bg_color))))
+            .into()
     }
 }
 
-// Main function to start the application
-fn main() -> eframe::Result<()> {
-    // Set up window options
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([420.0, 800.0]),
+fn main() -> iced::Result {
+    let is_dark = dark_light::detect().unwrap_or(dark_light::Mode::Light) == dark_light::Mode::Dark;
+    let icon = iced::window::icon::from_file("rustysvg2ico.ico").ok();
+    SvgToIcoApp::run(Settings {
+        flags: is_dark,
+        window: window::Settings {
+            size: Size::new(420.0, 868.0),
+            icon,
+            ..Default::default()
+        },
         ..Default::default()
-    };
-    // Run the native app with our SvgToIcoApp
-    eframe::run_native(
-        "Rusty SVG2ICO",
-        options,
-        Box::new(|_cc| Box::new(SvgToIcoApp::default())),
-    )
+    })
 }
