@@ -43,7 +43,7 @@ It also allows viewing existing ICO files.
 
 ## Dependencies
 
-- `eframe` & `egui` & `egui_extras`: For the GUI framework.
+- `iced` : For the GUI framework.
 - `rfd`: For file dialogs.
 - `svg_to_ico`: For SVG to ICO conversion.
 - `image` & `ico`: For image processing and ICO parsing.
